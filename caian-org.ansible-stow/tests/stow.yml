@@ -1,0 +1,10 @@
+---
+
+- name: ansible-stow test
+  hosts: all
+  tasks:
+    - name: '({{ state }}) stow package "foo"'
+      stow:
+        state: '{{ state }}'
+        package: foo
+        dir: '$HOME/package'
