@@ -27,6 +27,7 @@ For more information, please see
 '''
 
 import os
+import re
 from ansible.module_utils.basic import AnsibleModule
 
 
@@ -156,8 +157,8 @@ def stow(module, package, state):
         state (str): The desirable package state within the system.
 
     Returns:
-        dict: A dictionary that contains an error flag, the returned message
-            and wether something changed or not.
+        dict: A dictionary that contains an error flag, the error message
+            a changed flag, and an array of all change output lines.
     """
 
     params = module.params
@@ -172,8 +173,12 @@ def stow(module, package, state):
     elif state == 'latest':
         flag = '--restow'
 
-    cmd = 'stow {0} {1} --target={2} --dir={3} --verbose'.format(
-        flag, package, params['target'], params['dir']
+    check_flag = ''
+    if module.check_mode:
+      check_flag = '--simulate'
+
+    cmd = 'stow {0} {1} --target={2} --dir={3} --verbose {4}'.format(
+        flag, package, params['target'], params['dir'], check_flag
     )
 
     conflict = stow_has_conflicts(module, package, cmd)
@@ -186,23 +191,24 @@ def stow(module, package, state):
             return dict(error=True, message=err['message'])
 
     # When increasing verbosity level with the "--verbose" flag, all output
-    # will be sent to the standard error (stderr).
+    # will be sent to the standard error (stderr), **not** standard output
     #
     # Stow is, by itself, an idempotent tool.
     # If a given package is already stowed, the tool will not perform again.
-    # If a package is succesfully stowed, stow will output what have been done.
+    # If a package is succesfully stowed, stow will output what was changed.
     #
-    # That's why "information on stderr" equals "something has changed"
-    # (supposing execution passed all errors checking).
+    # Assuming execution passed all errors checking,
+    # any "information on stderr" equals "something has changed",
+    # excluding the "simlation" warning, which we remove here.
     rc_, _, se_ = module.run_command(cmd)
+    se_ = re.sub("WARNING: in simulation mode so not modifying filesystem.\n?", "", se_)
     if rc_ != 0:
         msg = 'execution of command "{0}" failed with error code {1}; output: "{2}"'.format(
             cmd, rc_, se_
         )
-
         return dict(error=True, message=msg)
 
-    return dict(error=False, changed=(se_ != ''))
+    return dict(error=False, changed=(se_ != ''), changes=se_)
 
 
 def main():
@@ -218,7 +224,8 @@ def main():
                 'type': 'str',
                 'choices': ['absent', 'present', 'latest', 'supress'],
             },
-        }
+        },
+        supports_check_mode=True
     )
 
     params = module.params
@@ -227,6 +234,7 @@ def main():
         module.fail_json(msg='unable to find stow')
 
     has_changed = False
+    all_changes = ""
 
     for package in list(params['package']):
         ret = stow(module, package, params['state'])
@@ -234,8 +242,9 @@ def main():
             module.fail_json(msg=ret['message'])
 
         has_changed = has_changed or ret['changed']
+        all_changes += ret['changes']
 
-    module.exit_json(changed=has_changed)
+    module.exit_json(changed=has_changed, changes=all_changes.splitlines())
 
 
 if __name__ == '__main__':
